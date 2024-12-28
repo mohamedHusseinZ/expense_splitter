@@ -95,7 +95,7 @@ def add_expense():
     }
     expenses.append(expense)
 
-    # Update balances (simplified logic)
+    # Update balances simplified logic
     share = amount / len(participants)
     for participant in participants:
         if participant == payer:
