@@ -1,99 +1,171 @@
-from flask import Flask, request, jsonify
-import jwt
+from flask import Flask, jsonify, request
+from flask_cors import CORS
 from functools import wraps
-from model import db, User, Expense, Settlement
-from service import (
-    add_user, authenticate, add_expense, get_expenses, update_expense, delete_expense,
-    get_balances, generate_report, record_settlement, get_user_profile
-)
+import jwt
+from jwt.exceptions import ExpiredSignatureError, InvalidTokenError
+from datetime import datetime, timedelta
 
 app = Flask(__name__)
-app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///expenses.db'
-app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
-app.config['SECRET_KEY'] = 'zaki'
+app.config['SECRET_KEY'] = 'your_secret_key'
 
-db.init_app(app)
+# Enable CORS with explicit support for all methods
+CORS(app, resources={r"/*": {"origins": "*"}}, supports_credentials=True)
 
-with app.app_context():
-    db.create_all()
+# Mock data and users (Replace with actual database models or external integrations)
+users = {"user1": "password123"}
+expenses = []
+balances = {}
 
-SECRET_KEY = app.config['SECRET_KEY']
-
+# Decorator to require JWT token for protected routes
 def token_required(f):
     @wraps(f)
     def decorated(*args, **kwargs):
         token = request.headers.get('Authorization')
-        if not token:
-            return jsonify({'status': 'error', 'message': 'Token is missing!'}), 403
+
+        if not token or not token.startswith("Bearer "):
+            return jsonify({'status': 'error', 'message': 'Invalid or missing token!'}), 403
+
         try:
-            data = jwt.decode(token, SECRET_KEY, algorithms=['HS256'])
-        except:
-            return jsonify({'status': 'error', 'message': 'Token is invalid!'}), 403
+            token = token.split(' ')[1]  # Extract token after 'Bearer'
+            data = jwt.decode(token, app.config['SECRET_KEY'], algorithms=['HS256'])
+            request.user = data['username']  # Attach username to the request context
+        except ExpiredSignatureError:
+            return jsonify({'status': 'error', 'message': 'Token has expired!'}), 403
+        except InvalidTokenError:
+            return jsonify({'status': 'error', 'message': 'Invalid token!'}), 403
+
         return f(*args, **kwargs)
+
     return decorated
 
+# Route to simulate login and issue JWT token
+@app.route('/login', methods=['POST'])
+def login():
+    auth = request.json
+    username = auth.get('username')
+    password = auth.get('password')
+
+    if username in users and users[username] == password:
+        # Create JWT token
+        token = jwt.encode(
+            {'username': username, 'exp': datetime.utcnow() + timedelta(hours=1)},
+            app.config['SECRET_KEY'],
+            algorithm='HS256'
+        )
+        return jsonify({'token': token})
+
+    return jsonify({'status': 'error', 'message': 'Invalid credentials!'}), 401
+
+# Route to register a new user
 @app.route('/register', methods=['POST'])
 def register():
     data = request.json
-    result = add_user(data['username'], data['email'], data['password'])
-    return jsonify(result)
+    username = data.get('username')
+    password = data.get('password')
 
-@app.route('/login', methods=['POST'])
-def login():
-    data = request.json
-    result = authenticate(data['username'], data['password'])
-    return jsonify(result)
+    if username in users:
+        return jsonify({'status': 'error', 'message': 'User already exists!'}), 400
 
+    users[username] = password
+    return jsonify({'status': 'success', 'message': f'User {username} registered successfully!'})
+
+# Route to add an expense
 @app.route('/add_expense', methods=['POST'])
 @token_required
-def add_expense_route():
+def add_expense():
     data = request.json
-    result = add_expense(data['payer'], data['amount'], data['participants'])
-    return jsonify(result)
+    payer = data.get('payer')
+    amount = data.get('amount')
+    participants = data.get('participants')
 
+    if not payer or not amount or not participants:
+        return jsonify({'status': 'error', 'message': 'Missing required fields!'}), 400
+
+    try:
+        # Ensure amount is a number (convert it to float)
+        amount = float(amount)
+    except ValueError:
+        return jsonify({'status': 'error', 'message': 'Amount must be a valid number!'}), 400
+
+    expense = {
+        "id": len(expenses) + 1,
+        "payer": payer,
+        "amount": amount,
+        "participants": participants
+    }
+    expenses.append(expense)
+
+    # Update balances (simplified logic)
+    share = amount / len(participants)
+    for participant in participants:
+        if participant == payer:
+            continue
+        balances[participant] = balances.get(participant, 0) + share
+        balances[payer] = balances.get(payer, 0) - share
+
+    return jsonify({"status": "success", "message": "Expense added successfully!", "data": expense})
+
+# Route to get all expenses
 @app.route('/expenses', methods=['GET'])
 @token_required
-def expenses_route():
-    result = get_expenses()
-    return jsonify(result)
+def get_expenses():
+    return jsonify({"status": "success", "expenses": expenses})
 
-@app.route('/expenses/<int:expense_id>', methods=['PUT'])
-@token_required
-def update_expense_route(expense_id):
-    data = request.json
-    result = update_expense(expense_id, data['amount'], data['participants'])
-    return jsonify(result)
-
-@app.route('/expenses/<int:expense_id>', methods=['DELETE'])
-@token_required
-def delete_expense_route(expense_id):
-    result = delete_expense(expense_id)
-    return jsonify(result)
-
+# Route to get balances
 @app.route('/balances', methods=['GET'])
 @token_required
-def balances_route():
-    result = get_balances()
-    return jsonify(result)
+def get_balances():
+    return jsonify({"status": "success", "balances": balances})
 
+# Route to update an expense
+@app.route('/expenses/<int:expense_id>', methods=['PUT'])
+@token_required
+def update_expense(expense_id):
+    data = request.json
+    expense = next((exp for exp in expenses if exp["id"] == expense_id), None)
+
+    if not expense:
+        return jsonify({'status': 'error', 'message': 'Expense not found!'}), 404
+
+    expense.update({
+        "payer": data.get('payer', expense["payer"]),
+        "amount": data.get('amount', expense["amount"]),
+        "participants": data.get('participants', expense["participants"])
+    })
+
+    return jsonify({"status": "success", "message": "Expense updated successfully!", "data": expense})
+
+# Route to delete an expense
+@app.route('/expenses/<int:expense_id>', methods=['DELETE'])
+@token_required
+def delete_expense(expense_id):
+    global expenses
+    expense = next((exp for exp in expenses if exp["id"] == expense_id), None)
+
+    if not expense:
+        return jsonify({'status': 'error', 'message': 'Expense not found!'}), 404
+
+    expenses = [exp for exp in expenses if exp["id"] != expense_id]
+    return jsonify({"status": "success", "message": "Expense deleted successfully!"})
+
+# Route to generate a report (mock data)
 @app.route('/report', methods=['GET'])
 @token_required
-def report_route():
-    result = generate_report()
-    return jsonify(result)
+def generate_report():
+    report = {"total_expenses": len(expenses), "total_amount": sum(exp["amount"] for exp in expenses)}
+    return jsonify({"status": "success", "report": report})
 
-@app.route('/settle', methods=['POST'])
-@token_required
-def settle():
-    data = request.json
-    result = record_settlement(data['expense_id'], data['payer'], data['payee'], data['amount'])
-    return jsonify(result)
-
+# Route to get user profile (mock data)
 @app.route('/profile/<username>', methods=['GET'])
 @token_required
 def user_profile(username):
-    result = get_user_profile(username)
-    return jsonify(result)
+    if username not in users:
+        return jsonify({'status': 'error', 'message': 'User not found!'}), 404
+
+    return jsonify({
+        "status": "success",
+        "profile": {"username": username, "expenses_count": len([exp for exp in expenses if exp["payer"] == username])}
+    })
 
 if __name__ == '__main__':
-    app.run(port=8080, debug=True)
+    app.run(port=5000, debug=True)

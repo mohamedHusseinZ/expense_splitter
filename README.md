@@ -1,6 +1,9 @@
 
 # expense_splitter
+<<<<<<< HEAD
 
+=======
+>>>>>>> abfab7b (my backend files)
 Expense Splitter Application
 The Expense Splitter app helps groups of people split expenses and track who owes what. It provides functionality for user authentication, adding expenses, viewing balances, settling payments, and generating reports. The app is built using Python, Flask, and SQLAlchemy.
 
@@ -146,4 +149,8 @@ makefile
 Copy code
 Authorization: Bearer <your_token>
 License
+<<<<<<< HEAD
 This project is licensed under the MIT License.
+=======
+This project is licensed under the MIT License.# finance-backend
+>>>>>>> abfab7b (my backend files)
